@@ -1,7 +1,9 @@
 from fastapi import FastAPI, UploadFile, File, Form, HTTPException
 from fastapi.responses import Response
 import numpy as np
-import cv2
+def get_cv2():
+    import cv2
+    return cv2
 import mediapipe as mp
 
 app = FastAPI()

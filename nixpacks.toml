@@ -1,4 +1,5 @@
 [phases.setup]
-# Nix packages to provide native shared libs required by OpenCV / MediaPipe.
-# libGL.so.1 is provided by mesa; X11-related libs are often needed as well.
-nixPkgs = ["mesa", "glib", "xorg.libX11", "xorg.libXext", "xorg.libXrender", "xorg.libSM", "libglvnd"]
+nixPkgs = ["glib", "libGL", "gcc", "zlib"]
+
+[phases.build]
+cmds = ["pip install -r requirements.txt"]

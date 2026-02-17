@@ -173,11 +173,12 @@ def skin_tan(img, mask):
     return blend_with_mask(img, result, mask)
 
 def skin_porcelain(img, mask):
-    filtered = cv2.bilateralFilter(img, d=15, sigmaColor=100, sigmaSpace=100)
+    filtered = cv2.bilateralFilter(img, d=11, sigmaColor=80, sigmaSpace=80)
     lab = cv2.cvtColor(filtered, cv2.COLOR_BGR2LAB)
     l, a, b = cv2.split(lab)
-    l = np.clip(l.astype(np.int16) + 20, 0, 255).astype(np.uint8)
-    a = np.clip(a.astype(np.int16), 124, 132).astype(np.uint8)
+    l = np.clip(l.astype(np.int16) + 12, 0, 255).astype(np.uint8)
+    a = np.clip(a.astype(np.float32) * 0.85 + 128 * 0.15, 0, 255).astype(np.uint8)
+    b = np.clip(b.astype(np.float32) * 0.9 + 128 * 0.1, 0, 255).astype(np.uint8)
     result = cv2.cvtColor(cv2.merge([l, a, b]), cv2.COLOR_LAB2BGR)
     return blend_with_mask(img, result, mask)
 

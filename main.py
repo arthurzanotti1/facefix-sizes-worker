@@ -1,19 +1,23 @@
 from fastapi import FastAPI, UploadFile, File, Form, HTTPException
 from fastapi.responses import Response
 import numpy as np
+import cv2
 import mediapipe as mp
-def get_cv2():
-    import cv2
-    return cv2
 
 app = FastAPI()
 
-mp_face_mesh = mp.solutions.face_mesh.FaceMesh(
-    static_image_mode=True,
-    max_num_faces=1,
-    refine_landmarks=True,
-    min_detection_confidence=0.5
-)
+_face_mesh = None
+
+def get_face_mesh():
+    global _face_mesh
+    if _face_mesh is None:
+        _face_mesh = mp.solutions.face_mesh.FaceMesh(
+            static_image_mode=True,
+            max_num_faces=1,
+            refine_landmarks=True,
+            min_detection_confidence=0.5
+        )
+    return _face_mesh
 
 LEFT_EYE = [33, 133, 159, 145, 153, 154, 155, 173]
 RIGHT_EYE = [362, 263, 386, 374, 380, 381, 382, 398]
@@ -122,7 +126,7 @@ async def resize(
         raise HTTPException(400, "Invalid image")
 
     rgb = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
-    res = mp_face_mesh.process(rgb)
+    res = get_face_mesh().process(rgb)
     if not res.multi_face_landmarks:
         raise HTTPException(422, "No face detected")
 

@@ -1,11 +1,15 @@
 [phases.setup]
 nixPkgs = [
+  "stdenv.cc.cc.lib",
+  "zlib",
   "mesa",
   "libglvnd",
   "glib",
+  "xorg.libX11",
   "xorg.libXext",
   "xorg.libSM",
-  "xorg.libXrender"
+  "xorg.libXrender",
+  "xorg.libICE"
 ]
 
 [phases.install]

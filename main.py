@@ -35,6 +35,11 @@ LIPS_CONTOUR = [61, 146, 91, 181, 84, 17, 314, 405, 321, 375, 291, 409, 270, 269
 LEFT_EYEBROW = [70, 63, 105, 66, 107, 55, 65, 52, 53, 46]
 RIGHT_EYEBROW = [300, 293, 334, 296, 336, 285, 295, 282, 283, 276]
 
+UPPER_LIP_OUTER = [61, 185, 40, 39, 37, 0, 267, 269, 270, 409, 291, 308, 415, 310, 311, 312, 13, 82, 81, 80, 191, 78]
+LOWER_LIP_OUTER = [78, 95, 88, 178, 87, 14, 317, 402, 318, 324, 308, 291, 375, 321, 405, 314, 17, 84, 181, 91, 146, 61]
+LEFT_EYE_UPPER = [246, 161, 160, 159, 158, 157, 173, 133, 155, 154, 153, 145, 144, 163, 7, 33]
+RIGHT_EYE_UPPER = [398, 384, 385, 386, 387, 388, 466, 263, 249, 390, 373, 374, 380, 381, 382, 362]
+
 def landmarks_to_points(landmarks, w, h, idxs):
     pts = []
     for i in idxs:
@@ -202,6 +207,179 @@ def apply_skin_effect(img_bgr, face_landmarks, effect_name):
     fn = SKIN_EFFECTS[effect_name]
     return fn(img_bgr, mask)
 
+# --- Makeup effects ---
+
+def create_lips_mask(landmarks, w, h, feather=15):
+    upper = landmarks_to_points(landmarks, w, h, UPPER_LIP_OUTER)
+    lower = landmarks_to_points(landmarks, w, h, LOWER_LIP_OUTER)
+    mask = np.zeros((h, w), dtype=np.uint8)
+    cv2.fillPoly(mask, [upper], 255)
+    cv2.fillPoly(mask, [lower], 255)
+    ksize = feather * 2 + 1
+    mask = cv2.GaussianBlur(mask, (ksize, ksize), feather // 2)
+    return mask.astype(np.float32) / 255.0
+
+def create_cheek_mask(landmarks, w, h):
+    mask = np.zeros((h, w), dtype=np.uint8)
+    nose_tip = landmarks[1]
+    left_cheek = landmarks[234]
+    right_cheek = landmarks[454]
+    nose_x, nose_y = int(nose_tip.x * w), int(nose_tip.y * h)
+    lc_x, lc_y = int(left_cheek.x * w), int(left_cheek.y * h)
+    rc_x, rc_y = int(right_cheek.x * w), int(right_cheek.y * h)
+    radius = int(abs(nose_x - lc_x) * 0.35)
+    cl_x = (nose_x + lc_x) // 2
+    cl_y = (nose_y + lc_y) // 2 + radius // 3
+    cr_x = (nose_x + rc_x) // 2
+    cr_y = (nose_y + rc_y) // 2 + radius // 3
+    cv2.ellipse(mask, (cl_x, cl_y), (radius, int(radius * 0.7)), 0, 0, 360, 255, -1)
+    cv2.ellipse(mask, (cr_x, cr_y), (radius, int(radius * 0.7)), 0, 0, 360, 255, -1)
+    mask = cv2.GaussianBlur(mask, (51, 51), 20)
+    return mask.astype(np.float32) / 255.0
+
+def create_eye_shadow_mask(landmarks, w, h):
+    mask = np.zeros((h, w), dtype=np.uint8)
+    for contour, brow in [(LEFT_EYE_UPPER, LEFT_EYEBROW), (RIGHT_EYE_UPPER, RIGHT_EYEBROW)]:
+        eye_pts = landmarks_to_points(landmarks, w, h, contour)
+        brow_pts = landmarks_to_points(landmarks, w, h, brow)
+        region = np.concatenate([eye_pts, brow_pts[::-1]])
+        cv2.fillPoly(mask, [region], 255)
+    mask = cv2.GaussianBlur(mask, (31, 31), 12)
+    return mask.astype(np.float32) / 255.0
+
+def create_contour_mask(landmarks, w, h):
+    face_pts = landmarks_to_points(landmarks, w, h, FACE_OVAL_PATH)
+    outer = np.zeros((h, w), dtype=np.uint8)
+    cv2.fillConvexPoly(outer, face_pts, 255)
+    inner = np.zeros((h, w), dtype=np.uint8)
+    cx, cy = np.mean(face_pts, axis=0).astype(int)
+    shrunk = ((face_pts - [cx, cy]) * 0.7 + [cx, cy]).astype(np.int32)
+    cv2.fillConvexPoly(inner, shrunk, 255)
+    band = cv2.subtract(outer, inner)
+    band = cv2.GaussianBlur(band, (41, 41), 18)
+    return band.astype(np.float32) / 255.0
+
+def create_highlight_mask(landmarks, w, h):
+    mask = np.zeros((h, w), dtype=np.uint8)
+    forehead = landmarks[10]
+    nose_bridge = landmarks[6]
+    chin = landmarks[152]
+    fx, fy = int(forehead.x * w), int(forehead.y * h)
+    nx, ny = int(nose_bridge.x * w), int(nose_bridge.y * h)
+    cx, cy = int(chin.x * w), int(chin.y * h)
+    face_w = int(abs(landmarks[234].x - landmarks[454].x) * w)
+    r = face_w // 5
+    cv2.ellipse(mask, (fx, fy), (r, int(r * 0.6)), 0, 0, 360, 255, -1)
+    cv2.ellipse(mask, (nx, ny), (int(r * 0.4), int(r * 1.2)), 0, 0, 360, 255, -1)
+    cv2.ellipse(mask, (cx, cy), (int(r * 0.6), int(r * 0.4)), 0, 0, 360, 255, -1)
+    mask = cv2.GaussianBlur(mask, (51, 51), 22)
+    return mask.astype(np.float32) / 255.0
+
+def makeup_natural(img, landmarks, w, h):
+    skin_mask = create_skin_mask(landmarks, w, h)
+    smoothed = cv2.bilateralFilter(img, d=7, sigmaColor=50, sigmaSpace=50)
+    result = blend_with_mask(img, smoothed, skin_mask * 0.5)
+    lips_mask = create_lips_mask(landmarks, w, h, feather=11)
+    lip_tint = result.copy()
+    lip_tint[:, :, 1] = np.clip(lip_tint[:, :, 1].astype(np.int16) - 10, 0, 255).astype(np.uint8)
+    lip_tint[:, :, 2] = np.clip(lip_tint[:, :, 2].astype(np.int16) + 15, 0, 255).astype(np.uint8)
+    result = blend_with_mask(result, lip_tint, lips_mask * 0.4)
+    return result
+
+def makeup_glam(img, landmarks, w, h):
+    skin_mask = create_skin_mask(landmarks, w, h)
+    smoothed = cv2.bilateralFilter(img, d=9, sigmaColor=70, sigmaSpace=70)
+    result = blend_with_mask(img, smoothed, skin_mask * 0.6)
+    lab = cv2.cvtColor(result, cv2.COLOR_BGR2LAB)
+    l, a, b = cv2.split(lab)
+    l = np.clip(l.astype(np.int16) + 8, 0, 255).astype(np.uint8)
+    bright = cv2.cvtColor(cv2.merge([l, a, b]), cv2.COLOR_LAB2BGR)
+    result = blend_with_mask(result, bright, skin_mask * 0.5)
+    lips_mask = create_lips_mask(landmarks, w, h)
+    lip_color = result.copy()
+    lip_color[:, :, 0] = np.clip(lip_color[:, :, 0].astype(np.int16) - 20, 0, 255).astype(np.uint8)
+    lip_color[:, :, 1] = np.clip(lip_color[:, :, 1].astype(np.int16) - 15, 0, 255).astype(np.uint8)
+    lip_color[:, :, 2] = np.clip(lip_color[:, :, 2].astype(np.int16) + 30, 0, 255).astype(np.uint8)
+    result = blend_with_mask(result, lip_color, lips_mask * 0.5)
+    eye_mask = create_eye_shadow_mask(landmarks, w, h)
+    eye_dark = result.copy()
+    eye_lab = cv2.cvtColor(eye_dark, cv2.COLOR_BGR2LAB)
+    el, ea, eb = cv2.split(eye_lab)
+    el = np.clip(el.astype(np.int16) - 15, 0, 255).astype(np.uint8)
+    eye_dark = cv2.cvtColor(cv2.merge([el, ea, eb]), cv2.COLOR_LAB2BGR)
+    result = blend_with_mask(result, eye_dark, eye_mask * 0.3)
+    return result
+
+def makeup_smoky(img, landmarks, w, h):
+    eye_mask = create_eye_shadow_mask(landmarks, w, h)
+    shadow = img.copy()
+    shadow_lab = cv2.cvtColor(shadow, cv2.COLOR_BGR2LAB)
+    sl, sa, sb = cv2.split(shadow_lab)
+    sl = np.clip(sl.astype(np.int16) - 40, 0, 255).astype(np.uint8)
+    shadow = cv2.cvtColor(cv2.merge([sl, sa, sb]), cv2.COLOR_LAB2BGR)
+    shadow[:, :, 0] = np.clip(shadow[:, :, 0].astype(np.int16) + 10, 0, 255).astype(np.uint8)
+    result = blend_with_mask(img, shadow, eye_mask * 0.55)
+    skin_mask = create_skin_mask(landmarks, w, h)
+    smoothed = cv2.bilateralFilter(result, d=5, sigmaColor=40, sigmaSpace=40)
+    result = blend_with_mask(result, smoothed, skin_mask * 0.3)
+    return result
+
+def makeup_blush(img, landmarks, w, h):
+    cheek_mask = create_cheek_mask(landmarks, w, h)
+    blush_overlay = img.copy()
+    blush_overlay[:, :, 0] = np.clip(blush_overlay[:, :, 0].astype(np.int16) - 15, 0, 255).astype(np.uint8)
+    blush_overlay[:, :, 1] = np.clip(blush_overlay[:, :, 1].astype(np.int16) - 10, 0, 255).astype(np.uint8)
+    blush_overlay[:, :, 2] = np.clip(blush_overlay[:, :, 2].astype(np.int16) + 25, 0, 255).astype(np.uint8)
+    result = blend_with_mask(img, blush_overlay, cheek_mask * 0.45)
+    skin_mask = create_skin_mask(landmarks, w, h)
+    smoothed = cv2.bilateralFilter(result, d=5, sigmaColor=40, sigmaSpace=40)
+    result = blend_with_mask(result, smoothed, skin_mask * 0.25)
+    return result
+
+def makeup_lipstick(img, landmarks, w, h):
+    lips_mask = create_lips_mask(landmarks, w, h, feather=9)
+    lip_color = img.copy()
+    lip_color[:, :, 0] = np.clip(lip_color[:, :, 0].astype(np.int16) - 40, 0, 255).astype(np.uint8)
+    lip_color[:, :, 1] = np.clip(lip_color[:, :, 1].astype(np.int16) - 30, 0, 255).astype(np.uint8)
+    lip_color[:, :, 2] = np.clip(lip_color[:, :, 2].astype(np.int16) + 50, 0, 255).astype(np.uint8)
+    result = blend_with_mask(img, lip_color, lips_mask * 0.6)
+    return result
+
+def makeup_contour(img, landmarks, w, h):
+    contour_mask = create_contour_mask(landmarks, w, h)
+    darkened = img.copy()
+    dark_lab = cv2.cvtColor(darkened, cv2.COLOR_BGR2LAB)
+    dl, da, db = cv2.split(dark_lab)
+    dl = np.clip(dl.astype(np.int16) - 20, 0, 255).astype(np.uint8)
+    da = np.clip(da.astype(np.int16) + 4, 0, 255).astype(np.uint8)
+    darkened = cv2.cvtColor(cv2.merge([dl, da, db]), cv2.COLOR_LAB2BGR)
+    result = blend_with_mask(img, darkened, contour_mask * 0.5)
+    highlight_mask = create_highlight_mask(landmarks, w, h)
+    bright = result.copy()
+    bright_lab = cv2.cvtColor(bright, cv2.COLOR_BGR2LAB)
+    bl, ba, bb = cv2.split(bright_lab)
+    bl = np.clip(bl.astype(np.int16) + 15, 0, 255).astype(np.uint8)
+    bright = cv2.cvtColor(cv2.merge([bl, ba, bb]), cv2.COLOR_LAB2BGR)
+    result = blend_with_mask(result, bright, highlight_mask * 0.4)
+    skin_mask = create_skin_mask(landmarks, w, h)
+    smoothed = cv2.bilateralFilter(result, d=5, sigmaColor=40, sigmaSpace=40)
+    result = blend_with_mask(result, smoothed, skin_mask * 0.25)
+    return result
+
+MAKEUP_EFFECTS = {
+    "natural": makeup_natural,
+    "glam": makeup_glam,
+    "smoky": makeup_smoky,
+    "blush": makeup_blush,
+    "lipstick": makeup_lipstick,
+    "contour": makeup_contour,
+}
+
+def apply_makeup_effect(img_bgr, face_landmarks, effect_name):
+    h, w = img_bgr.shape[:2]
+    fn = MAKEUP_EFFECTS[effect_name]
+    return fn(img_bgr, face_landmarks, w, h)
+
 @app.post("/resize")
 async def resize(
     image: UploadFile = File(...),
@@ -226,6 +404,34 @@ async def resize(
 
     face = res.multi_face_landmarks[0].landmark
     out = apply_feature(img, face, feature, amount)
+
+    ok, buf = cv2.imencode(".jpg", out, [int(cv2.IMWRITE_JPEG_QUALITY), 92])
+    if not ok:
+        raise HTTPException(500, "Encode failed")
+
+    return Response(content=buf.tobytes(), media_type="image/jpeg")
+
+@app.post("/makeup")
+async def makeup(
+    image: UploadFile = File(...),
+    effect: str = Form(...)
+):
+    if effect not in MAKEUP_EFFECTS:
+        raise HTTPException(400, f"effect must be one of: {', '.join(MAKEUP_EFFECTS.keys())}")
+
+    data = await image.read()
+    npimg = np.frombuffer(data, np.uint8)
+    img = cv2.imdecode(npimg, cv2.IMREAD_COLOR)
+    if img is None:
+        raise HTTPException(400, "Invalid image")
+
+    rgb = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+    res = get_face_mesh().process(rgb)
+    if not res.multi_face_landmarks:
+        raise HTTPException(422, "No face detected")
+
+    face = res.multi_face_landmarks[0].landmark
+    out = apply_makeup_effect(img, face, effect)
 
     ok, buf = cv2.imencode(".jpg", out, [int(cv2.IMWRITE_JPEG_QUALITY), 92])
     if not ok:
